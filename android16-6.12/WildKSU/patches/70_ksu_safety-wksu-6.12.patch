@@ -1,7 +1,7 @@
-diff -ruN a/kernel/supercalls.c b/kernel/supercalls.c
---- a/kernel/supercalls.c
-+++ b/kernel/supercalls.c
-@@ -1000,6 +1000,12 @@
+diff -ruN clean/kernel/supercalls.c work/kernel/supercalls.c
+--- a/kernel/supercalls.c	2026-03-02 18:37:34.153901650 +0100
++++ b/kernel/supercalls.c	2026-03-03 19:28:53.681580207 +0100
+@@ -992,6 +992,12 @@
              susfs_add_sus_kstat(arg);
              return 0;
          }
@@ -11,28 +11,6 @@ diff -ruN a/kernel/supercalls.c b/kernel/supercalls.c
 +            return 0;
 +        }
 +#endif
- #endif // #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+ #endif //#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
  #ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
          if (cmd == CMD_SUSFS_SET_UNAME) {
-
-diff -ruN a/kernel/Kconfig b/kernel/Kconfig
---- a/kernel/Kconfig
-+++ b/kernel/Kconfig
-@@ -180,3 +180,17 @@
-+config KSU_SUSFS_SUS_KSTAT_REDIRECT
-+	bool "SUSFS kstat redirect"
-+	depends on KSU_SUSFS_SUS_KSTAT
-+	default y
-+	help
-+	  Redirects kstat lookups to real file metadata for spoofed paths.
-+
-+config KSU_SUSFS_UNICODE_FILTER
-+	bool "Unicode Filter (blocks scoped storage bypass)"
-+	depends on KSU_SUSFS
-+	default y
-+	help
-+	  Blocks filesystem path attacks using unicode characters.
-+
- endmenu
- 
- endmenu
