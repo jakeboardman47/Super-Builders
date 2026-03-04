@@ -828,7 +828,7 @@
  };
 +
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+noinline void susfs_reorder_mnt_id(void) {}
++noinline void __used susfs_reorder_mnt_id(void) {}
 +#endif
 --- a/fs/notify/fdinfo.c	2026-03-01 05:28:53.309667410 +0100
 +++ b/fs/notify/fdinfo.c	2026-03-01 12:33:18.243608134 +0100

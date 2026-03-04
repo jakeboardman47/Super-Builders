@@ -908,7 +908,7 @@ diff -ruN clean/fs/namespace.c work/fs/namespace.c
 +
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +/* Reorder the mnt_id after all sus mounts are umounted during ksu_handle_setuid() */
-+noinline void susfs_reorder_mnt_id(void) {
++noinline void __used susfs_reorder_mnt_id(void) {
 +	struct mnt_namespace *mnt_ns = current->nsproxy->mnt_ns;
 +	struct mount *mnt;
 +	int first_mnt_id = 0;
@@ -943,7 +943,7 @@ diff -ruN clean/fs/namespace.c work/fs/namespace.c
 +	up_read(&namespace_sem);
 +}
 +#else
-+noinline void susfs_reorder_mnt_id(void) { }
++noinline void __used susfs_reorder_mnt_id(void) { }
 +#endif
 diff -ruN clean/fs/notify/fdinfo.c work/fs/notify/fdinfo.c
 --- a/fs/notify/fdinfo.c	2026-02-25 02:24:55.115547755 +0100

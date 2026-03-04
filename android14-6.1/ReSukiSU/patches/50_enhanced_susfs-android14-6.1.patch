@@ -784,7 +784,7 @@
 +
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +/* Reorder the mnt_id after all sus mounts are umounted during ksu_handle_setuid() */
-+noinline void susfs_reorder_mnt_id(void) {
++noinline void __used susfs_reorder_mnt_id(void) {
 +	struct mnt_namespace *mnt_ns = current->nsproxy->mnt_ns;
 +	struct mount *mnt;
 +	int first_mnt_id = 0;

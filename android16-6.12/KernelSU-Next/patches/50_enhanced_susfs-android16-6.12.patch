@@ -924,7 +924,7 @@ diff '--color=auto' -ruN '--exclude=.git' clean/fs/namespace.c work/fs/namespace
 +
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +/* Reorder the mnt_id after all sus mounts are umounted during ksu_handle_setuid() */
-+noinline void susfs_reorder_mnt_id(void) {
++noinline void __used susfs_reorder_mnt_id(void) {
 +	struct mnt_namespace *mnt_ns = current->nsproxy->mnt_ns;
 +	struct mount *mnt;
 +	struct rb_node *node;
@@ -962,7 +962,7 @@ diff '--color=auto' -ruN '--exclude=.git' clean/fs/namespace.c work/fs/namespace
 +	up_read(&namespace_sem);
 +}
 +#else
-+noinline void susfs_reorder_mnt_id(void) { }
++noinline void __used susfs_reorder_mnt_id(void) { }
 +#endif
 +
 diff '--color=auto' -ruN '--exclude=.git' clean/fs/notify/fdinfo.c work/fs/notify/fdinfo.c
