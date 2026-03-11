@@ -210,7 +210,7 @@ jobs:
         fi
         KSU_PATCH=$(find "$GITHUB_WORKSPACE/susfs_patches/kernel_patches/KernelSU" -name '10_enable_susfs_for_ksu.patch' 2>/dev/null | head -1)
         [ -z "$KSU_PATCH" ] && { echo "::warning::No 10_ KSU patch found, skipping"; exit 0; }
-        patch -p1 -F3 --no-backup-if-mismatch < "$KSU_PATCH"
+        patch -p1 -F3 --no-backup-if-mismatch < "$KSU_PATCH" || echo "::warning::10_ patch failed — SUSFS Kconfig will be pruned, kernel builds without KSU-side SUSFS"
 
     - name: Configure Defconfig
       working-directory: kernel_source
