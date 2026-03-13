@@ -197,6 +197,7 @@
     "lto_default": "thin",
     "image_path": "arch/arm64/boot/Image",
     "fix_patches_dir": "SM-A546B-Oneui7",
+    "defconfig": "s5e8835-a54xnaxx_defconfig",
     "wifi_fix": false,
     "extra_artifacts": []
   },
@@ -215,6 +216,7 @@
     "lto_default": "thin",
     "image_path": "arch/arm64/boot/Image",
     "fix_patches_dir": "SM-A546E-Oneui7",
+    "defconfig": "s5e8835-a54xnaxx_defconfig",
     "wifi_fix": false,
     "extra_artifacts": []
   },

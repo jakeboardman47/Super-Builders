@@ -107,6 +107,7 @@ jobs:
         COMMON_PATH=$(echo "$DEVICE_JSON" | jq -r '.common_path')
         FIX_PATCHES_DIR=$(echo "$DEVICE_JSON" | jq -r '.fix_patches_dir // empty')
         WIFI_FIX=$(echo "$DEVICE_JSON" | jq -r '.wifi_fix // false')
+        DEFCONFIG_NAME=$(echo "$DEVICE_JSON" | jq -r '.defconfig // "gki_defconfig"')
 
         VERSION_DIR="${ANDROID_VER}-${KERNEL_VER}"
         if [ ! -d "$GITHUB_WORKSPACE/$VERSION_DIR" ]; then
@@ -141,6 +142,7 @@ jobs:
           echo "COMMON_PATH=$COMMON_PATH"
           echo "FIX_PATCHES_DIR=$FIX_PATCHES_DIR"
           echo "WIFI_FIX=$WIFI_FIX"
+          echo "DEFCONFIG_NAME=$DEFCONFIG_NAME"
           echo "VERSION_DIR=$VERSION_DIR"
           echo "GKI_TAG=$GKI_TAG"
           echo "OEM_HELPERS=$GITHUB_WORKSPACE/android12-5.10/build-helpers"
@@ -156,7 +158,7 @@ jobs:
 
         echo "SYNC_DIR=$SYNC_DIR" >> "$GITHUB_ENV"
         echo "KERNEL_COMMON=$SYNC_DIR/$COMMON_PATH" >> "$GITHUB_ENV"
-        echo "DEFCONFIG=$SYNC_DIR/$COMMON_PATH/arch/arm64/configs/gki_defconfig" >> "$GITHUB_ENV"
+        echo "DEFCONFIG=$SYNC_DIR/$COMMON_PATH/arch/arm64/configs/${DEFCONFIG_NAME}" >> "$GITHUB_ENV"
 
     - name: Detect Kernel Version
       run: |
@@ -344,8 +346,16 @@ jobs:
       run: |
         bash "$OEM_HELPERS/samsung-wifi-fix.sh" "$KERNEL_COMMON"
 
-    - name: Targeted Compilation
+    - name: Detect Samsung Compiler Wrapper
       if: env.DRY_TEST_STATUS == 'PASSED'
+      run: |
+        if find "$SYNC_DIR" -name 'compiler_wrapper.go' -maxdepth 8 2>/dev/null | grep -q .; then
+          echo "::notice::Samsung Go compiler wrapper detected — skipping targeted compilation"
+          echo "SKIP_COMPILE=true" >> "$GITHUB_ENV"
+        fi
+
+    - name: Targeted Compilation
+      if: env.DRY_TEST_STATUS == 'PASSED' && env.SKIP_COMPILE != 'true'
       working-directory: ${{ env.KERNEL_COMMON }}
       run: |
         export PATH="${CLANG_BIN}:$PATH"
@@ -361,7 +371,7 @@ jobs:
           OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
           CROSS_COMPILE=aarch64-linux-gnu-"
 
-        $MAKE gki_defconfig
+        $MAKE "${DEFCONFIG_NAME}"
         $MAKE -j"$(nproc)" prepare
 
         PATCH_DIR="$GITHUB_WORKSPACE/$VERSION_DIR/SukiSU-Ultra/patches"
@@ -376,7 +386,7 @@ jobs:
           done < <(grep '^diff --git' "$PFILE" | sed 's|diff --git a/||; s| b/.*||' | grep '\.c$' | sort -u)
         done
 
-        for dir in fs/susfs fs/zeromount drivers/samsung; do
+        for dir in fs/susfs fs/zeromount; do
           [ -d "$dir" ] || continue
           for f in "$dir"/*.c; do
             [ -f "$f" ] && TARGETS+=("${f%.c}.o")
