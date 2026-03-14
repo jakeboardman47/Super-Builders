@@ -30,7 +30,7 @@ on:
       add_bbg:
         description: "Add Baseband Guard"
         type: boolean
-        default: true
+        default: false
       add_ptrace_fix:
         description: "Apply ptrace leak fix (kernels < 5.16)"
         type: boolean
@@ -71,7 +71,7 @@ on:
         default: false
       add_bbg:
         type: boolean
-        default: true
+        default: false
       add_ptrace_fix:
         type: boolean
         default: true
@@ -370,7 +370,7 @@ jobs:
       if: inputs.add_bbg
       working-directory: ${{ env.KERNEL_COMMON }}
       run: |
-        bash "$GITHUB_WORKSPACE/android12-5.10/build-helpers/setup-bbg.sh" "$SYNC_DIR/kernel_platform" "$DEFCONFIG" "$DEFCONFIG_FRAGMENT"
+        bash "$GITHUB_WORKSPACE/android12-5.10/build-helpers/setup-bbg.sh" "$KERNEL_COMMON" "$DEFCONFIG" "$DEFCONFIG_FRAGMENT"
 
     - name: Assemble Defconfig
       working-directory: ${{ env.SYNC_DIR }}
