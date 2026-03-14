@@ -1,0 +1,131 @@
+name: "Samsung M14 Reference Build (MrPankaj24 replica)"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Samsung M14 KSU-Next (reference)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: MrPankaj24/SM-M146B-Kernel-Source
+          ref: main
+          fetch-depth: 1
+
+      - name: Patch KernelSU-Next
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s stable
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            git curl wget bc bison flex libssl-dev libelf-dev \
+            python3 python-is-python3 make gcc gcc-aarch64-linux-gnu \
+            binutils binutils-aarch64-linux-gnu g++ cpio zip unzip \
+            lz4 zstd xz-utils libncurses-dev libncurses5-dev \
+            kmod rsync lld llvm clang dwarves pahole ccache \
+            device-tree-compiler zlib1g-dev libc6-dev-i386 cmake ninja-build
+
+      - name: Cache Toolchains
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchain/clang/host/linux-x86/clang-r450784d
+            toolchain/build/kernel/build-tools
+            toolchain/prebuilts/kernel-build-tools
+          key: toolchain-clang-r450784d-kernel-build-tools-v3
+
+      - name: Download Clang r450784d
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p toolchain/clang/host/linux-x86/clang-r450784d
+          curl -L "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-release/clang-r450784d.tar.gz" \
+            -o /tmp/clang.tar.gz
+          tar -xzf /tmp/clang.tar.gz -C toolchain/clang/host/linux-x86/clang-r450784d
+          rm /tmp/clang.tar.gz
+          toolchain/clang/host/linux-x86/clang-r450784d/bin/clang --version
+
+      - name: Download Kernel Build Tools
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 -b main \
+            https://android.googlesource.com/kernel/prebuilts/build-tools \
+            toolchain/build/kernel/build-tools
+
+      - name: Download Kernel Prebuilt Tools
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 \
+            https://android.googlesource.com/kernel/prebuilts/build-tools \
+            toolchain/prebuilts/kernel-build-tools
+
+      - name: Compile Kernel
+        run: |
+          set -e
+          set -o pipefail
+
+          export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH
+          export PATH=$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH
+          export HOSTCFLAGS="-I$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/include"
+          export HOSTLDFLAGS="-Wl,-rpath,$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -L$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -fuse-ld=lld --rtlib=compiler-rt"
+
+          export DTC_FLAGS="-@"
+          export PLATFORM_VERSION=15
+          export ANDROID_MAJOR_VERSION=v
+          export LLVM=1
+          export DEPMOD=depmod
+          export ARCH=arm64
+          export TARGET_SOC=s5e8535
+
+          make s5e8535-m14xnsxx_defconfig
+
+          cat >> .config << 'KSUEOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_MANUAL_HOOK=y
+          KSUEOF
+          sed -i 's/^[[:space:]]*//' .config
+
+          make olddefconfig
+          grep -E "CONFIG_KSU" .config || true
+
+          make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
+
+      - name: Collect Artifacts
+        if: success()
+        run: |
+          mkdir -p out/kernel out/dtbs
+
+          [ -f arch/arm64/boot/Image ] && cp arch/arm64/boot/Image out/kernel/
+          [ -f arch/arm64/boot/Image.gz ] && cp arch/arm64/boot/Image.gz out/kernel/
+
+          find arch/arm64/boot/dts/exynos -name "*.dtb" 2>/dev/null | \
+            xargs -I{} cp {} out/dtbs/ 2>/dev/null || true
+
+          echo "=== Kernel ==="
+          ls -lh out/kernel/ 2>/dev/null
+          echo "=== DTBs ==="
+          ls out/dtbs/ 2>/dev/null | wc -l
+
+      - name: Upload Kernel
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: samsung-m14-reference-kernel
+          path: out/
+          retention-days: 30
+
+      - name: Upload Build Log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-failure
+          path: /tmp/kernel_build.log
+          if-no-files-found: ignore
+          retention-days: 7
