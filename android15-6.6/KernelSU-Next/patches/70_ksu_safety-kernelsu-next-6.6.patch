@@ -568,14 +568,14 @@ diff -ruN clean-kernel/policy/app_profile.c work-kernel-v2/policy/app_profile.c
      return 0;
 diff -ruN clean-kernel/runtime/ksud.h work-kernel-v2/runtime/ksud.h
 --- a/kernel/runtime/ksud.h	2026-04-09 11:57:48.451373296 +0100
-+++ b/kernel/runtime/ksud.h	2026-04-10 02:04:45.505730821 +0100
++++ b/kernel/runtime/ksud.h	2026-04-10 03:20:41.079543981 +0100
 @@ -11,4 +11,12 @@
  void ksu_execve_hook_ksud(const struct pt_regs *regs);
  void ksu_stop_input_hook_runtime(void);
  
 +#ifdef CONFIG_KSU_SUSFS
++extern bool ksu_init_rc_hook;
 +extern bool ksu_execveat_hook;
-+extern bool ksu_read_hook;
 +extern bool ksu_input_hook;
 +void ksu_handle_sys_read(unsigned int fd);
 +void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr);
@@ -584,8 +584,18 @@ diff -ruN clean-kernel/runtime/ksud.h work-kernel-v2/runtime/ksud.h
  #endif
 diff -ruN clean-kernel/runtime/ksud_integration.c work-kernel-v2/runtime/ksud_integration.c
 --- a/kernel/runtime/ksud_integration.c	2026-04-09 11:57:48.451373296 +0100
-+++ b/kernel/runtime/ksud_integration.c	2026-04-10 02:05:20.444976487 +0100
-@@ -49,7 +49,13 @@
++++ b/kernel/runtime/ksud_integration.c	2026-04-10 03:20:31.452534254 +0100
+@@ -24,7 +24,9 @@
+ #include "runtime/ksud_boot.h"
+ #include "selinux/selinux.h"
+ #include "hook/syscall_hook.h"
++#ifndef CONFIG_KSU_SUSFS
+ #include "hook/syscall_event_bridge.h"
++#endif
+ 
+ // clang-format off
+ static const char KERNEL_SU_RC[] =
+@@ -49,7 +51,14 @@
  static void stop_init_rc_hook();
  static void stop_execve_hook();
  
@@ -593,13 +603,27 @@ diff -ruN clean-kernel/runtime/ksud_integration.c work-kernel-v2/runtime/ksud_in
  static struct work_struct stop_input_hook_work;
 +#else
 +bool ksu_execveat_hook __read_mostly = true;
-+bool ksu_read_hook __read_mostly = true;
++bool ksu_init_rc_hook __read_mostly = true;
++bool ksu_execveat_hook __read_mostly = true;
 +bool ksu_input_hook __read_mostly = true;
 +#endif
  
  #define MAX_ARG_STRINGS 0x7FFFFFFF
  struct user_arg_ptr {
-@@ -316,8 +322,16 @@
+@@ -170,7 +179,12 @@
+             pr_info("exec zygote, /data prepared, second_stage: %d\n", init_second_stage_executed);
+             on_post_fs_data();
+             first_zygote = false;
++#ifndef CONFIG_KSU_SUSFS
+             ksu_stop_ksud_execve_hook();
++#else
++            ksu_execveat_hook = false;
++            pr_info("stop execveat_hook\n");
++#endif
+         }
+     }
+ }
+@@ -316,8 +330,16 @@
      file->f_op = &fops_proxy;
  }
  
@@ -610,13 +634,13 @@ diff -ruN clean-kernel/runtime/ksud_integration.c work-kernel-v2/runtime/ksud_in
 +#endif
  {
 +#ifdef CONFIG_KSU_SUSFS
-+    if (!ksu_read_hook)
++    if (!ksu_init_rc_hook)
 +        return;
 +#endif
      struct file *file = fget(fd);
      if (!file) {
          return;
-@@ -335,6 +349,11 @@
+@@ -335,6 +357,11 @@
  
  int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value)
  {
@@ -628,7 +652,7 @@ diff -ruN clean-kernel/runtime/ksud_integration.c work-kernel-v2/runtime/ksud_in
      if (*type == EV_KEY && *code == KEY_VOLUMEDOWN) {
          int val = *value;
          pr_info("KEY_VOLUMEDOWN val: %d\n", val);
-@@ -378,6 +397,10 @@
+@@ -378,6 +405,10 @@
  
  void ksu_execve_hook_ksud(const struct pt_regs *regs)
  {
@@ -639,7 +663,7 @@ diff -ruN clean-kernel/runtime/ksud_integration.c work-kernel-v2/runtime/ksud_in
      const char __user **filename_user = (const char **)&PT_REGS_PARM1(regs);
      const char __user *const __user *__argv = (const char __user *const __user *)PT_REGS_PARM2(regs);
      struct user_arg_ptr argv = { .ptr.native = __argv };
-@@ -406,10 +429,14 @@
+@@ -406,10 +437,14 @@
  static long ksu_sys_read(const struct pt_regs *regs)
  {
      unsigned int fd = PT_REGS_PARM1(regs);
@@ -654,7 +678,7 @@ diff -ruN clean-kernel/runtime/ksud_integration.c work-kernel-v2/runtime/ksud_in
      return orig_sys_read(regs);
  }
  
-@@ -451,6 +478,25 @@
+@@ -451,6 +486,25 @@
      return ret;
  }
  
@@ -680,15 +704,30 @@ diff -ruN clean-kernel/runtime/ksud_integration.c work-kernel-v2/runtime/ksud_in
  static int input_handle_event_handler_pre(struct kprobe *p, struct pt_regs *regs)
  {
      unsigned int *type = (unsigned int *)&PT_REGS_PARM2(regs);
-@@ -468,6 +514,7 @@
+@@ -468,13 +522,22 @@
  {
      unregister_kprobe(&input_event_kp);
  }
 +#endif
  
++#ifndef CONFIG_KSU_SUSFS
  static void stop_init_rc_hook()
  {
-@@ -483,28 +530,37 @@
+     ksu_syscall_table_unhook(__NR_read);
+     ksu_syscall_table_unhook(__NR_fstat);
+     pr_info("unregister init_rc syscall hook\n");
+ }
++#else
++static void stop_init_rc_hook()
++{
++    ksu_init_rc_hook = false;
++    pr_info("stop init_rc_hook\n");
++}
++#endif
+ 
+ void ksu_stop_input_hook_runtime(void)
+ {
+@@ -483,28 +546,37 @@
          return;
      }
      input_hook_stopped = true;
