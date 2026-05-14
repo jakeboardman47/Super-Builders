@@ -21,7 +21,7 @@ static int __init rfl_init(void)
 {
 	int ret;
 
-	rfl_pr_info("loading (built %s %s)\n", __DATE__, __TIME__);
+	rfl_pr_info("loading v0.1.0-mvp\n");
 
 	ret = rfl_syms_init();
 	if (ret)
