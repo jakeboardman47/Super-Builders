@@ -1,0 +1,6 @@
+id=redirfs-lite
+name=redirfs-lite
+version=0.1.0-mvp
+versionCode=1
+author=redirfs-lite contributors
+description=Loadable VFS path redirection module (kprobe-based, no kernel rebuild)

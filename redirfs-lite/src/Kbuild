@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0
+obj-m += redirfs_lite.o
+
+redirfs_lite-y := \
+	main.o \
+	syms.o \
+	rules.o \
+	hook_getname.o \
+	hook_dpath.o \
+	proc.o
+
+ccflags-y += -Wall -Werror=implicit-function-declaration

@@ -1,0 +1,130 @@
+name: Build redirfs-lite
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      android_version:
+        description: "Android version"
+        type: choice
+        options: [android15, android16]
+        default: "android15"
+      kernel_version:
+        description: "Kernel version"
+        type: choice
+        options: ["6.6", "6.12"]
+        default: "6.6"
+      os_patch_level:
+        description: "OS patch level (manifest branch suffix)"
+        type: string
+        default: "2026-04"
+      sub_level_hint:
+        description: "Sublevel (informational; actual sublevel comes from synced source)"
+        type: string
+        default: "127"
+
+jobs:
+  build:
+    name: "redirfs-lite ${{ inputs.kernel_version }} ${{ inputs.os_patch_level }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANDROID_VER: ${{ inputs.android_version }}
+      KERNEL_VER:  ${{ inputs.kernel_version }}
+      OS_PATCH:    ${{ inputs.os_patch_level }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Free disk
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          rm_cmd: "rmz"
+          rmz_version: "3.1.1"
+          testing: false
+
+      - name: Install repo tool
+        run: |
+          mkdir -p $HOME/bin
+          curl -L https://storage.googleapis.com/git-repo-downloads/repo -o $HOME/bin/repo
+          chmod +x $HOME/bin/repo
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Sync kernel source
+        run: |
+          mkdir -p kernel_src && cd kernel_src
+          BRANCH="common-${ANDROID_VER}-${KERNEL_VER}-${OS_PATCH}"
+          repo init -u https://android.googlesource.com/kernel/manifest \
+              -b "$BRANCH" --depth=1
+          repo --trace sync -c -j$(nproc) --fail-fast --no-tags --force-sync --no-clone-bundle
+
+      - name: Configure kernel for module headers
+        working-directory: kernel_src
+        run: |
+          # Prebuilt clang sysroot lacks glibc 2.39 C23 symbols — link against system libc
+          if [ -f common/tools/bpf/resolve_btfids/Makefile ]; then
+            echo 'override KBUILD_HOSTLDFLAGS += --sysroot=/' >> common/tools/bpf/resolve_btfids/Makefile
+            echo 'override LDFLAGS += --sysroot=/' >> common/tools/bpf/resolve_btfids/Makefile
+          fi
+          # We need the kernel build artefacts (Module.symvers, .config, generated headers).
+          # Cheapest path: run modules_prepare against the GKI defconfig in tree.
+          tools/bazel build --config=fast --lto=none //common:kernel_aarch64_modules_prepare \
+              || tools/bazel build --config=fast --lto=none //common:kernel_aarch64
+
+      - name: Locate built kernel headers
+        id: locate
+        working-directory: kernel_src
+        run: |
+          # Bazel output_base contains generated headers and Module.symvers
+          KDIR=$(find bazel-out -type d -name 'kernel_aarch64' 2>/dev/null | head -1)
+          [ -z "$KDIR" ] && KDIR=$(find . -path '*/common' -type d ! -path '*/bazel-*' | head -1)
+          if [ -z "$KDIR" ] || [ ! -d "$KDIR" ]; then
+            echo "::error::Could not locate kernel headers directory"
+            exit 1
+          fi
+          # Make absolute
+          KDIR_ABS=$(cd "$KDIR" && pwd)
+          echo "kdir=$KDIR_ABS" >> "$GITHUB_OUTPUT"
+          echo "Using KDIR=$KDIR_ABS"
+          ls -la "$KDIR_ABS" | head -20
+
+      - name: Setup clang toolchain
+        working-directory: kernel_src
+        run: |
+          CLANG_DIR=$(find prebuilts/clang/host/linux-x86 -maxdepth 2 -type d -name 'clang-r*' | sort | tail -1)
+          if [ -z "$CLANG_DIR" ]; then
+            echo "::error::AOSP clang prebuilt not found under prebuilts/clang/host/linux-x86"
+            exit 1
+          fi
+          echo "$CLANG_DIR/bin" >> "$GITHUB_PATH"
+          echo "Using $CLANG_DIR"
+
+      - name: Build redirfs-lite
+        env:
+          KDIR: ${{ steps.locate.outputs.kdir }}
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/redirfs-lite"
+          make KDIR="$KDIR" ARCH=arm64 LLVM=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- 2>&1 | tee build.log
+          ls -la src/redirfs_lite.ko
+          file src/redirfs_lite.ko
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: redirfs-lite-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}
+          path: |
+            redirfs-lite/src/redirfs_lite.ko
+            redirfs-lite/build.log
+          if-no-files-found: warn
+          retention-days: 14
