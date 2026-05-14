@@ -84,58 +84,49 @@ jobs:
         id: locate
         working-directory: kernel_src
         run: |
-          # A valid KDIR must be a kernel tree (Makefile with VERSION=, arch/arm64
-          # present) AND have generated artefacts (.config or include/generated).
-          is_valid_kdir() {
+          # A valid KDIR is a directory with a kernel-shape: contains arch/arm64
+          # and either a Makefile or scripts/. We rank candidates by how
+          # "prepared" they look (.config / include/generated present = best).
+          score_kdir() {
               local d="$1"
-              [ -d "$d" ] || return 1
-              [ -f "$d/Makefile" ] || return 1
-              grep -q '^VERSION = ' "$d/Makefile" || return 1
-              [ -d "$d/arch/arm64" ] || return 1
-              # Need either a .config (build-ready) or generated headers (prepared)
-              [ -f "$d/.config" ] || [ -d "$d/include/generated" ] || return 1
-              return 0
+              local s=0
+              [ -d "$d/arch/arm64" ] || { echo -1; return; }
+              [ -f "$d/Makefile" ]      && s=$((s + 1))
+              [ -d "$d/scripts" ]       && s=$((s + 1))
+              [ -d "$d/include" ]       && s=$((s + 1))
+              [ -f "$d/.config" ]       && s=$((s + 4))
+              [ -d "$d/include/generated" ] && s=$((s + 4))
+              [ -f "$d/Module.symvers" ]    && s=$((s + 4))
+              echo "$s"
           }
 
-          KDIR=""
-          # 1. Highest-quality candidate: out/cache/*/common (kleaf cache hit)
-          for c in out/cache/*/common; do
+          BEST_KDIR=""
+          BEST_SCORE=0
+          for c in $(find out -maxdepth 6 -type d -name common 2>/dev/null; echo common); do
               [ -d "$c" ] || continue
-              if is_valid_kdir "$c"; then
-                  KDIR="$c"; break
+              sc=$(score_kdir "$c")
+              if [ "$sc" -gt "$BEST_SCORE" ]; then
+                  BEST_SCORE=$sc; BEST_KDIR=$c
               fi
           done
 
-          # 2. Fallback: any common/ under out/ with valid kernel shape
-          if [ -z "$KDIR" ]; then
-              while IFS= read -r c; do
-                  if is_valid_kdir "$c"; then
-                      KDIR="$c"; break
-                  fi
-              done < <(find out -maxdepth 6 -type d -name common 2>/dev/null)
-          fi
-
-          # 3. Last resort: top-level common/ (no build artefacts there usually,
-          #    but worth a try if everything else missed)
-          if [ -z "$KDIR" ] && is_valid_kdir common; then
-              KDIR=common
-          fi
-
-          if [ -z "$KDIR" ]; then
-              echo "::error::Could not locate a valid kernel KDIR"
+          if [ -z "$BEST_KDIR" ]; then
+              echo "::error::Could not locate any kernel-shaped common/ directory"
               echo "::group::out/ tree (depth 4)"
               find out -maxdepth 4 -type d 2>/dev/null | head -40
               echo "::endgroup::"
               exit 1
           fi
 
-          KDIR_ABS=$(cd "$KDIR" && pwd)
+          KDIR_ABS=$(cd "$BEST_KDIR" && pwd)
           echo "kdir=$KDIR_ABS" >> "$GITHUB_OUTPUT"
-          echo "Using KDIR=$KDIR_ABS"
+          echo "Selected KDIR=$KDIR_ABS (score=$BEST_SCORE)"
           echo "::group::KDIR contents"
-          ls -la "$KDIR_ABS" | head -25
-          [ -f "$KDIR_ABS/.config" ] && echo "(.config present)" || echo "(no .config)"
-          [ -d "$KDIR_ABS/include/generated" ] && echo "(include/generated present)" || echo "(no include/generated)"
+          ls -la "$KDIR_ABS" | head -40
+          for f in Makefile .config Module.symvers vmlinux; do
+              [ -e "$KDIR_ABS/$f" ] && echo "PRESENT: $f" || echo "MISSING: $f"
+          done
+          [ -d "$KDIR_ABS/include/generated" ] && echo "PRESENT: include/generated/" || echo "MISSING: include/generated/"
           echo "::endgroup::"
 
       - name: Setup clang toolchain
