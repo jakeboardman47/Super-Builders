@@ -84,18 +84,59 @@ jobs:
         id: locate
         working-directory: kernel_src
         run: |
-          # Bazel output_base contains generated headers and Module.symvers
-          KDIR=$(find bazel-out -type d -name 'kernel_aarch64' 2>/dev/null | head -1)
-          [ -z "$KDIR" ] && KDIR=$(find . -path '*/common' -type d ! -path '*/bazel-*' | head -1)
-          if [ -z "$KDIR" ] || [ ! -d "$KDIR" ]; then
-            echo "::error::Could not locate kernel headers directory"
-            exit 1
+          # A valid KDIR must be a kernel tree (Makefile with VERSION=, arch/arm64
+          # present) AND have generated artefacts (.config or include/generated).
+          is_valid_kdir() {
+              local d="$1"
+              [ -d "$d" ] || return 1
+              [ -f "$d/Makefile" ] || return 1
+              grep -q '^VERSION = ' "$d/Makefile" || return 1
+              [ -d "$d/arch/arm64" ] || return 1
+              # Need either a .config (build-ready) or generated headers (prepared)
+              [ -f "$d/.config" ] || [ -d "$d/include/generated" ] || return 1
+              return 0
+          }
+
+          KDIR=""
+          # 1. Highest-quality candidate: out/cache/*/common (kleaf cache hit)
+          for c in out/cache/*/common; do
+              [ -d "$c" ] || continue
+              if is_valid_kdir "$c"; then
+                  KDIR="$c"; break
+              fi
+          done
+
+          # 2. Fallback: any common/ under out/ with valid kernel shape
+          if [ -z "$KDIR" ]; then
+              while IFS= read -r c; do
+                  if is_valid_kdir "$c"; then
+                      KDIR="$c"; break
+                  fi
+              done < <(find out -maxdepth 6 -type d -name common 2>/dev/null)
           fi
-          # Make absolute
+
+          # 3. Last resort: top-level common/ (no build artefacts there usually,
+          #    but worth a try if everything else missed)
+          if [ -z "$KDIR" ] && is_valid_kdir common; then
+              KDIR=common
+          fi
+
+          if [ -z "$KDIR" ]; then
+              echo "::error::Could not locate a valid kernel KDIR"
+              echo "::group::out/ tree (depth 4)"
+              find out -maxdepth 4 -type d 2>/dev/null | head -40
+              echo "::endgroup::"
+              exit 1
+          fi
+
           KDIR_ABS=$(cd "$KDIR" && pwd)
           echo "kdir=$KDIR_ABS" >> "$GITHUB_OUTPUT"
           echo "Using KDIR=$KDIR_ABS"
-          ls -la "$KDIR_ABS" | head -20
+          echo "::group::KDIR contents"
+          ls -la "$KDIR_ABS" | head -25
+          [ -f "$KDIR_ABS/.config" ] && echo "(.config present)" || echo "(no .config)"
+          [ -d "$KDIR_ABS/include/generated" ] && echo "(include/generated present)" || echo "(no include/generated)"
+          echo "::endgroup::"
 
       - name: Setup clang toolchain
         working-directory: kernel_src
