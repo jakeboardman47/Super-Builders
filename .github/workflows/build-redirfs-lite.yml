@@ -139,7 +139,8 @@ jobs:
           # llvm-readelf, llvm-objdump, llvm-cov. AOSP prebuilt ships clang+lld
           # only via the clang-r* dir; the rest live in the same bin/ folder.
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang lld llvm
+          sudo apt-get install -y -qq clang lld llvm dwarves
+          # dwarves provides pahole, needed by BTF [M] step in modfinal.
 
           # Prefer AOSP prebuilt clang if synced (matches the compiler used to
           # build the running kernel — avoids the "compiler differs" warning).
