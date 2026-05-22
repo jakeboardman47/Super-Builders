@@ -17,24 +17,24 @@ on:
         type: choice
         options: ["6.6", "6.12"]
         default: "6.6"
-      os_patch_level:
-        description: "OS patch level (manifest branch suffix)"
+      manifest_branch:
+        description: "Manifest branch (full name, e.g. common-android15-6.6-lts or common-android15-6.6-2026-04)"
         type: string
-        default: "2026-04"
+        default: "common-android15-6.6-lts"
       sub_level_hint:
-        description: "Sublevel (informational; actual sublevel comes from synced source)"
+        description: "Expected SUBLEVEL (informational only; the actual value comes from synced source)"
         type: string
-        default: "127"
+        default: "139"
 
 jobs:
   build:
-    name: "redirfs-lite ${{ inputs.kernel_version }} ${{ inputs.os_patch_level }}"
+    name: "redirfs-lite ${{ inputs.kernel_version }} ${{ inputs.manifest_branch }}"
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      ANDROID_VER: ${{ inputs.android_version }}
-      KERNEL_VER:  ${{ inputs.kernel_version }}
-      OS_PATCH:    ${{ inputs.os_patch_level }}
+      ANDROID_VER:     ${{ inputs.android_version }}
+      KERNEL_VER:      ${{ inputs.kernel_version }}
+      MANIFEST_BRANCH: ${{ inputs.manifest_branch }}
 
     steps:
       - name: Checkout
@@ -62,10 +62,11 @@ jobs:
       - name: Sync kernel source
         run: |
           mkdir -p kernel_src && cd kernel_src
-          BRANCH="common-${ANDROID_VER}-${KERNEL_VER}-${OS_PATCH}"
           repo init -u https://android.googlesource.com/kernel/manifest \
-              -b "$BRANCH" --depth=1
+              -b "$MANIFEST_BRANCH" --depth=1
           repo --trace sync -c -j$(nproc) --fail-fast --no-tags --force-sync --no-clone-bundle
+          echo "==== synced Makefile SUBLEVEL ===="
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION)' common/Makefile | head -4
 
       - name: Configure kernel for module headers
         working-directory: kernel_src
@@ -130,25 +131,39 @@ jobs:
           echo "::endgroup::"
 
       - name: Setup clang toolchain
+        id: clang
         working-directory: kernel_src
         run: |
-          CLANG_DIR=$(find prebuilts/clang/host/linux-x86 -maxdepth 2 -type d -name 'clang-r*' | sort | tail -1)
-          if [ -z "$CLANG_DIR" ]; then
-            echo "::error::AOSP clang prebuilt not found under prebuilts/clang/host/linux-x86"
-            exit 1
+          # 1) Prefer AOSP prebuilt if synced (full kernel_aarch64 build pulls it)
+          CLANG_DIR=$(find prebuilts/clang/host/linux-x86 -maxdepth 2 -type d -name 'clang-r*' 2>/dev/null | sort | tail -1)
+          if [ -n "$CLANG_DIR" ] && [ -x "$CLANG_DIR/bin/clang" ]; then
+              echo "Using AOSP prebuilt: $CLANG_DIR"
+              echo "$CLANG_DIR/bin" >> "$GITHUB_PATH"
+              echo "source=aosp" >> "$GITHUB_OUTPUT"
+              exit 0
           fi
-          echo "$CLANG_DIR/bin" >> "$GITHUB_PATH"
-          echo "Using $CLANG_DIR"
+          # 2) Fall back to Ubuntu system clang (ubuntu-24.04 ships clang 18)
+          echo "AOSP prebuilt unavailable, installing system clang+lld"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm
+          which clang lld llvm-strip
+          clang --version | head -1
+          echo "source=ubuntu" >> "$GITHUB_OUTPUT"
 
       - name: Build redirfs-lite
         env:
-          KDIR: ${{ steps.locate.outputs.kdir }}
+          KDIR:        ${{ steps.locate.outputs.kdir }}
+          CLANG_SOURCE: ${{ steps.clang.outputs.source }}
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/redirfs-lite"
-          make KDIR="$KDIR" ARCH=arm64 LLVM=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- 2>&1 | tee build.log
+          # With Ubuntu clang, drop CROSS_COMPILE prefix and rely on clang -target via LLVM=1.
+          # When LLVM=1, kbuild uses clang, ld.lld, llvm-objcopy, etc. unprefixed.
+          make KDIR="$KDIR" ARCH=arm64 LLVM=1 2>&1 | tee build.log
           ls -la src/redirfs_lite.ko
           file src/redirfs_lite.ko
+          echo "==== vermagic ===="
+          strings -a src/redirfs_lite.ko | grep '^vermagic=' || echo "(no vermagic string?)"
 
       - name: Upload artifacts
         if: always()
