@@ -134,32 +134,45 @@ jobs:
         id: clang
         working-directory: kernel_src
         run: |
-          # 1) Prefer AOSP prebuilt if synced (full kernel_aarch64 build pulls it)
-          CLANG_DIR=$(find prebuilts/clang/host/linux-x86 -maxdepth 2 -type d -name 'clang-r*' 2>/dev/null | sort | tail -1)
-          if [ -n "$CLANG_DIR" ] && [ -x "$CLANG_DIR/bin/clang" ]; then
-              echo "Using AOSP prebuilt: $CLANG_DIR"
-              echo "$CLANG_DIR/bin" >> "$GITHUB_PATH"
-              echo "source=aosp" >> "$GITHUB_OUTPUT"
-              exit 0
-          fi
-          # 2) Fall back to Ubuntu system clang (ubuntu-24.04 ships clang 18)
-          echo "AOSP prebuilt unavailable, installing system clang+lld"
+          # Always install Ubuntu LLVM utilities. Kbuild with LLVM=1 needs the
+          # full set: clang, ld.lld, llvm-ar, llvm-nm, llvm-objcopy, llvm-strip,
+          # llvm-readelf, llvm-objdump, llvm-cov. AOSP prebuilt ships clang+lld
+          # only via the clang-r* dir; the rest live in the same bin/ folder.
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang lld llvm
-          which clang lld llvm-strip
+
+          # Prefer AOSP prebuilt clang if synced (matches the compiler used to
+          # build the running kernel — avoids the "compiler differs" warning).
+          CLANG_REL=$(find prebuilts/clang/host/linux-x86 -maxdepth 2 -type d -name 'clang-r*' 2>/dev/null | sort | tail -1)
+          if [ -n "$CLANG_REL" ] && [ -x "$CLANG_REL/bin/clang" ]; then
+              CLANG_ABS=$(cd "$CLANG_REL" && pwd)
+              echo "Using AOSP prebuilt: $CLANG_ABS"
+              echo "$CLANG_ABS/bin" >> "$GITHUB_PATH"
+              echo "source=aosp" >> "$GITHUB_OUTPUT"
+              echo "clang_dir=$CLANG_ABS/bin" >> "$GITHUB_OUTPUT"
+          else
+              echo "AOSP prebuilt unavailable, using Ubuntu /usr/bin clang"
+              echo "source=ubuntu" >> "$GITHUB_OUTPUT"
+              echo "clang_dir=/usr/bin" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Effective PATH for compiler: $(which clang lld llvm-strip llvm-objcopy 2>&1 | head -5)"
           clang --version | head -1
-          echo "source=ubuntu" >> "$GITHUB_OUTPUT"
 
       - name: Build redirfs-lite
         env:
-          KDIR:        ${{ steps.locate.outputs.kdir }}
+          KDIR:         ${{ steps.locate.outputs.kdir }}
           CLANG_SOURCE: ${{ steps.clang.outputs.source }}
+          CLANG_DIR:    ${{ steps.clang.outputs.clang_dir }}
         run: |
           set -e
+          echo "Build env: KDIR=$KDIR  CLANG_SOURCE=$CLANG_SOURCE  CLANG_DIR=$CLANG_DIR"
+          which clang lld llvm-objcopy llvm-strip || true
           cd "$GITHUB_WORKSPACE/redirfs-lite"
-          # With Ubuntu clang, drop CROSS_COMPILE prefix and rely on clang -target via LLVM=1.
-          # When LLVM=1, kbuild uses clang, ld.lld, llvm-objcopy, etc. unprefixed.
-          make KDIR="$KDIR" ARCH=arm64 LLVM=1 2>&1 | tee build.log
+          # LLVM=1 makes kbuild use unprefixed clang/ld.lld/llvm-* — no CROSS_COMPILE needed.
+          # Pass full PATH-resolved clang to make sure we use what we picked.
+          make KDIR="$KDIR" ARCH=arm64 LLVM=1 \
+               HOSTCC=clang HOSTCXX=clang++ CC=clang LD=ld.lld \
+               2>&1 | tee build.log
           ls -la src/redirfs_lite.ko
           file src/redirfs_lite.ko
           echo "==== vermagic ===="
