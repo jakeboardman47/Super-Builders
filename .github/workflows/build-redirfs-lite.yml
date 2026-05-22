@@ -76,10 +76,10 @@ jobs:
             echo 'override KBUILD_HOSTLDFLAGS += --sysroot=/' >> common/tools/bpf/resolve_btfids/Makefile
             echo 'override LDFLAGS += --sysroot=/' >> common/tools/bpf/resolve_btfids/Makefile
           fi
-          # We need the kernel build artefacts (Module.symvers, .config, generated headers).
-          # Cheapest path: run modules_prepare against the GKI defconfig in tree.
-          tools/bazel build --config=fast --lto=none //common:kernel_aarch64_modules_prepare \
-              || tools/bazel build --config=fast --lto=none //common:kernel_aarch64
+          # Out-of-tree modules need Module.symvers for CONFIG_MODVERSIONS CRC
+          # generation in MODPOST. modules_prepare alone doesn't produce it —
+          # we need the full kernel_aarch64 build (slower but canonical).
+          tools/bazel build --config=fast --lto=none //common:kernel_aarch64
 
       - name: Locate built kernel headers
         id: locate
