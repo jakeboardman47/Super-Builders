@@ -23,28 +23,39 @@ ui_print " redirfs-lite v0.1.0-mvp"
 ui_print " kprobe VFS redirection for KSU-Next"
 ui_print "================================"
 
-# --- KSU variant detection ---------------------------------------------------
-# KSU-Next ships ksud at /data/adb/ksu/bin/ksud and writes "next" to
-# /data/adb/ksu/version (or has KSU_NEXT_VERSION exported). The exact marker
-# varies by KSU-Next version, so we probe several heuristics.
-KSU_VARIANT=unknown
-if [ -e /data/adb/ksu ]; then
-	if [ -f /data/adb/ksu/version ]; then
-		KSU_VARIANT=$(cat /data/adb/ksu/version 2>/dev/null | head -1)
-	fi
-	# Strings probe on ksud as fallback
-	if [ "$KSU_VARIANT" = "unknown" ] && [ -f /data/adb/ksu/bin/ksud ]; then
-		if strings /data/adb/ksu/bin/ksud 2>/dev/null | grep -qi 'KernelSU-Next\|KSU.Next\|ksu_next'; then
-			KSU_VARIANT="ksu-next (detected via ksud strings)"
-		elif strings /data/adb/ksu/bin/ksud 2>/dev/null | grep -qi 'SukiSU'; then
-			KSU_VARIANT="sukisu"
-		fi
-	fi
-fi
-ui_print "- detected root: $KSU_VARIANT"
+# --- Root manager detection -------------------------------------------------
+# KSU, KSU-Next and Magisk all export environment variables from their
+# installer wrapper:
+#   $KSU = "true"          → KernelSU or KernelSU-Next
+#   $KSU_VER, $KSU_VER_CODE → KSU/KSU-Next version
+#   $KSU_KERNEL_VER_CODE   → kernel-side KSU version
+#   $MAGISK_VER, $MAGISK_VER_CODE → Magisk
+#
+# If env vars aren't set (e.g. recovery install without a proper wrapper),
+# fall back to filesystem probes.
 
-if [ "$KSU_VARIANT" = "unknown" ] && [ ! -d /data/adb/magisk ]; then
-	abort "! Neither KSU-Next nor Magisk detected. Install one first."
+ROOT_MGR=""
+if [ "${KSU:-}" = "true" ]; then
+	ROOT_MGR="KSU/KSU-Next (KSU_VER=${KSU_VER:-?} code=${KSU_VER_CODE:-?})"
+elif [ -n "${MAGISK_VER:-}" ]; then
+	ROOT_MGR="Magisk $MAGISK_VER (code=$MAGISK_VER_CODE)"
+elif [ -e /data/adb/ksu ] || [ -e /data/adb/ksud ]; then
+	ROOT_MGR="KSU-family (filesystem probe: /data/adb/ksu present)"
+elif [ -d /data/adb/magisk ]; then
+	ROOT_MGR="Magisk (filesystem probe: /data/adb/magisk present)"
+fi
+
+ui_print "- root: ${ROOT_MGR:-NOT DETECTED}"
+
+if [ -z "$ROOT_MGR" ]; then
+	ui_print "! Diagnostic: env vars and dirs ="
+	ui_print "!   KSU=${KSU:-unset}"
+	ui_print "!   KSU_VER=${KSU_VER:-unset}"
+	ui_print "!   MAGISK_VER=${MAGISK_VER:-unset}"
+	ui_print "!   /data/adb/ksu : $([ -e /data/adb/ksu ] && echo present || echo absent)"
+	ui_print "!   /data/adb/ksud: $([ -e /data/adb/ksud ] && echo present || echo absent)"
+	ui_print "!   /data/adb/magisk: $([ -d /data/adb/magisk ] && echo present || echo absent)"
+	abort "! No root manager detected"
 fi
 
 # --- File sanity -------------------------------------------------------------
