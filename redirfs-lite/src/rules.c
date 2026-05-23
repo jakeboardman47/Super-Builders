@@ -3,21 +3,43 @@
  * Rule table: RCU-protected hash. Reads are lock-free; writes serialize on
  * rules_mutex. Lookup is by exact `src` path match against an FNV-1a hash.
  *
- * Per-rule UID/GID filter: RFL_ID_ANY matches any caller; otherwise must match
- * current_uid()/current_gid() exactly. (No range or set support in MVP.)
+ * Default policy: hide from EVERY non-root caller.
+ *   - If `hide_from_root` (module param, default true) is on, processes with
+ *     effective UID 0 see the real filesystem state. Everyone else gets the
+ *     rule-table view (path redirect + d_path spoof).
+ *   - Per-rule UID/GID filter still works as a refinement on top of this:
+ *     RFL_ID_ANY matches any non-root caller; specific values match only that
+ *     UID/GID. Use this to scope a rule to one app while leaving root alone.
+ *   - To temporarily disable the root-bypass (so redirection applies to root
+ *     too — useful for debugging): `echo 0 > /sys/module/redirfs_lite/parameters/hide_from_root`
  */
 
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/slab.h>
 #include <linux/mutex.h>
 #include <linux/seq_file.h>
 #include <linux/hashtable.h>
 #include <linux/string.h>
+#include <linux/cred.h>
+#include <linux/uidgid.h>
 #include "redirfs.h"
 
 static DEFINE_HASHTABLE(rules_ht, 8); /* 256 buckets */
 static DEFINE_MUTEX(rules_mutex);
 static atomic_t rule_count = ATOMIC_INIT(0);
+
+/* Default: hide from every non-root caller; root sees real fs state. */
+static bool rfl_hide_from_root = true;
+module_param_named(hide_from_root, rfl_hide_from_root, bool, 0644);
+MODULE_PARM_DESC(hide_from_root,
+	"Skip redirection when current process has EUID=0 (default: true). "
+	"Set to false to apply rules to root as well.");
+
+static inline bool caller_is_root(kuid_t uid)
+{
+	return uid_eq(uid, GLOBAL_ROOT_UID);
+}
 
 static u32 fnv1a(const char *s, size_t len)
 {
@@ -77,11 +99,19 @@ const struct rfl_rule *rfl_rule_lookup(const char *path, kuid_t uid, kgid_t gid)
 	struct rfl_rule *r;
 	u32 key;
 	size_t plen;
-	u32 cuid = from_kuid(&init_user_ns, uid);
-	u32 cgid = from_kgid(&init_user_ns, gid);
+	u32 cuid, cgid;
 
 	if (!path)
 		return NULL;
+
+	/* Default policy: skip redirection for root callers. Module param
+	 * `hide_from_root` (sysfs-modifiable) gates this. */
+	if (READ_ONCE(rfl_hide_from_root) && caller_is_root(uid))
+		return NULL;
+
+	cuid = from_kuid(&init_user_ns, uid);
+	cgid = from_kgid(&init_user_ns, gid);
+
 	plen = strnlen(path, RFL_PATH_MAX);
 	if (plen == 0 || plen >= RFL_PATH_MAX)
 		return NULL;
@@ -108,11 +138,18 @@ const struct rfl_rule *rfl_rule_lookup_by_dst(const char *path, kuid_t uid, kgid
 	struct rfl_rule *r;
 	int bkt;
 	size_t plen;
-	u32 cuid = from_kuid(&init_user_ns, uid);
-	u32 cgid = from_kgid(&init_user_ns, gid);
+	u32 cuid, cgid;
 
 	if (!path)
 		return NULL;
+
+	/* Root sees real paths — symmetric to forward lookup */
+	if (READ_ONCE(rfl_hide_from_root) && caller_is_root(uid))
+		return NULL;
+
+	cuid = from_kuid(&init_user_ns, uid);
+	cgid = from_kgid(&init_user_ns, gid);
+
 	plen = strnlen(path, RFL_PATH_MAX);
 	if (plen == 0 || plen >= RFL_PATH_MAX)
 		return NULL;

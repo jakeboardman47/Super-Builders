@@ -1,5 +1,10 @@
 # /data/adb/redirfs/rules.conf
 #
+# Default policy: every non-root caller sees the rule-table view; root sees
+# real filesystem state. This is enforced by the `hide_from_root` module
+# parameter (default ON; toggle with
+# `echo 0 > /sys/module/redirfs_lite/parameters/hide_from_root`).
+#
 # Lines applied to /proc/redirfs/rules at every boot via post-fs-data.sh.
 # Grammar (one command per line; blank lines and '#' comments ignored):
 #
@@ -9,19 +14,20 @@
 #   audit on|off
 #
 # <src> and <dst> must be absolute paths (start with /).
-# <uid> = numeric UID for the rule to match, or * for any.
-# <gid> = same for GID.
+# <uid> / <gid>: usually leave as '*' (any non-root caller). Specify a
+# concrete value to scope the rule to a single app, e.g. only redirect when
+# the banking app (uid 10042) does the open.
 #
-# Examples:
+# Examples (with default hide_from_root=on):
 #
-# # Redirect a specific banking-app-detected path for only that app (uid 10042):
-# # add /system/etc/some_path /data/local/tmp/shimmed_path 10042 *
+# # Hide a path from every app, every shell, every system process EXCEPT root:
+# # add /system/etc/sentinel /data/local/tmp/shim * *
 #
-# # Make /system/xbin/su read-only-redirect to a no-op stub for unprivileged uids
-# # add /system/xbin/su /data/local/tmp/empty * *
+# # Hide ONLY for the banking app (uid 10042) — other apps see the real file:
+# # add /system/etc/sentinel /data/local/tmp/shim 10042 *
 #
-# # Disable audit logging in dmesg
+# # Stop logging redirect events to dmesg (audit is on by default):
 # # audit off
 
-# (Smoke-test rule from initial bring-up. Safe to delete.)
+# Smoke-test rule from initial bring-up. Safe to delete.
 add /data/local/tmp/src_test /data/local/tmp/dst_test * *
