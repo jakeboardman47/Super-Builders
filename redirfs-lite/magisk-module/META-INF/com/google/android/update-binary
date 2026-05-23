@@ -1,0 +1,38 @@
+#!/sbin/sh
+#################
+# redirfs-lite Magisk/KSU module installer
+#
+# Delegates to Magisk's util_functions.sh — works under Magisk, KernelSU,
+# SukiSU, and any KSU variant that ships a Magisk-compatible module loader.
+#################
+
+umask 022
+
+# This script is invoked by the recovery installer with these args:
+#   $1 = api version (unused)
+#   $2 = output fd
+#   $3 = full path to the zip being installed
+OUTFD=$2
+ZIPFILE=$3
+
+# Standard Magisk module installer boilerplate — locate util_functions, defer.
+mount /data 2>/dev/null
+
+if [ -f /data/adb/magisk/util_functions.sh ]; then
+	. /data/adb/magisk/util_functions.sh
+	install_module
+elif [ -f /data/adb/ksu/bin/busybox ]; then
+	# KernelSU path (older versions). Newer KSU ships util_functions too.
+	. /data/adb/ksu/util_functions.sh 2>/dev/null || {
+		echo "! No Magisk-compatible loader found"
+		echo "! Install Magisk or a KSU variant first"
+		exit 1
+	}
+	install_module
+else
+	echo "! Neither Magisk nor KernelSU detected"
+	echo "! Install one of them, then re-flash this module"
+	exit 1
+fi
+
+exit 0

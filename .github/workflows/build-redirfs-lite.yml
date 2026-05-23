@@ -180,13 +180,47 @@ jobs:
           echo "==== vermagic ===="
           strings -a src/redirfs_lite.ko | grep '^vermagic=' || echo "(no vermagic string?)"
 
+      - name: Package Magisk/KSU module zip
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/redirfs-lite"
+          STAGE=/tmp/redirfs-lite-module
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+
+          # Copy template
+          cp -r magisk-module/. "$STAGE/"
+
+          # Drop in the freshly-built .ko (strip debug to shrink ~450KB -> ~80KB)
+          cp src/redirfs_lite.ko "$STAGE/redirfs_lite.ko"
+          ${CLANG_DIR:-/usr/bin}/llvm-strip --strip-debug "$STAGE/redirfs_lite.ko" 2>/dev/null \
+              || llvm-strip --strip-debug "$STAGE/redirfs_lite.ko" 2>/dev/null \
+              || echo "(strip failed, shipping with debug_info)"
+          ls -la "$STAGE/redirfs_lite.ko"
+
+          # Embed kernel target + vermagic in module.prop for traceability
+          KVM=$(strings -a "$STAGE/redirfs_lite.ko" | grep '^vermagic=' | head -1)
+          {
+              echo ""
+              echo "# build provenance"
+              echo "# kernel-target: ${MANIFEST_BRANCH}"
+              echo "# module-vermagic: ${KVM#vermagic=}"
+              echo "# built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$STAGE/module.prop"
+
+          # Zip with unix permissions preserved (Magisk update-binary needs +x)
+          ZIPNAME="redirfs-lite-${MANIFEST_BRANCH}.zip"
+          (cd "$STAGE" && zip -r9 "$GITHUB_WORKSPACE/redirfs-lite/$ZIPNAME" .) | tail -20
+          ls -la "$GITHUB_WORKSPACE/redirfs-lite/$ZIPNAME"
+          echo "ZIPNAME=$ZIPNAME" >> "$GITHUB_ENV"
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: redirfs-lite-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}
+          name: redirfs-lite-${{ inputs.kernel_version }}-${{ inputs.manifest_branch }}
           path: |
             redirfs-lite/src/redirfs_lite.ko
             redirfs-lite/build.log
+            redirfs-lite/redirfs-lite-*.zip
           if-no-files-found: warn
           retention-days: 14
