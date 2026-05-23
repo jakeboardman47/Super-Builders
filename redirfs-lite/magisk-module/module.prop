@@ -1,6 +1,9 @@
 id=redirfs-lite
-name=redirfs-lite
+name=redirfs-lite (KSU-Next)
 version=0.1.0-mvp
 versionCode=1
 author=redirfs-lite contributors
-description=Loadable VFS path redirection module (kprobe-based, no kernel rebuild)
+description=KernelSU-Next module: kprobe-based VFS path redirection (LKM). Per-UID/GID rules, d_path spoof, no kernel rebuild. Manage via Action button or /data/adb/redirfs/rules.conf.
+support=https://github.com/jakeboardman47/Super-Builders/tree/redirfs-lite-mvp/redirfs-lite
+minMagisk=20400
+minKsu=10940

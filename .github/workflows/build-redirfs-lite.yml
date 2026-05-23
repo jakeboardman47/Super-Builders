@@ -207,8 +207,16 @@ jobs:
               echo "# built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> "$STAGE/module.prop"
 
-          # Zip with unix permissions preserved (Magisk update-binary needs +x)
-          ZIPNAME="redirfs-lite-${MANIFEST_BRANCH}.zip"
+          # Make scripts executable (zip preserves perm bits for KSU-Next/Magisk)
+          chmod +x "$STAGE"/META-INF/com/google/android/update-binary
+          chmod +x "$STAGE"/customize.sh
+          chmod +x "$STAGE"/post-fs-data.sh
+          chmod +x "$STAGE"/service.sh
+          chmod +x "$STAGE"/action.sh 2>/dev/null
+          chmod +x "$STAGE"/uninstall.sh 2>/dev/null
+
+          # Zip with unix permissions preserved
+          ZIPNAME="redirfs-lite-ksu-next-${MANIFEST_BRANCH}.zip"
           (cd "$STAGE" && zip -r9 "$GITHUB_WORKSPACE/redirfs-lite/$ZIPNAME" .) | tail -20
           ls -la "$GITHUB_WORKSPACE/redirfs-lite/$ZIPNAME"
           echo "ZIPNAME=$ZIPNAME" >> "$GITHUB_ENV"
