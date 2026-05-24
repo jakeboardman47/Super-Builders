@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>redirfs-full</title>
+<style>
+:root {
+	--bg: #101418;
+	--card: #1a1f25;
+	--card-2: #232931;
+	--text: #e6edf3;
+	--muted: #8b96a3;
+	--accent: #7aa2f7;
+	--accent-2: #2a3140;
+	--ok: #6fcf97;
+	--warn: #e8b863;
+	--err: #f47174;
+	--border: #2a3140;
+}
+* { box-sizing: border-box; }
+html, body {
+	margin: 0; padding: 0;
+	font: 14px/1.4 -apple-system, "Roboto", "Segoe UI", system-ui, sans-serif;
+	background: var(--bg); color: var(--text);
+	-webkit-tap-highlight-color: transparent;
+}
+.app { padding: 16px; padding-bottom: env(safe-area-inset-bottom, 16px); max-width: 720px; margin: 0 auto; }
+header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; }
+header h1 { margin: 0; font-size: 20px; font-weight: 600; }
+header .ver { color: var(--muted); font-size: 12px; }
+section { background: var(--card); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--border); }
+section h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+.row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.row:last-child { margin-bottom: 0; }
+.row label { color: var(--muted); font-size: 12px; min-width: 36px; }
+select, input[type=text], button {
+	font: inherit; color: inherit;
+	background: var(--card-2); border: 1px solid var(--border);
+	border-radius: 8px; padding: 8px 10px;
+	width: 100%;
+}
+select { -webkit-appearance: none; appearance: none; padding-right: 24px;
+	background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+	background-position: calc(100% - 14px) 50%, calc(100% - 8px) 50%;
+	background-size: 6px 6px, 6px 6px;
+	background-repeat: no-repeat;
+}
+button {
+	background: var(--accent-2); border-color: var(--accent);
+	color: var(--accent); font-weight: 600; cursor: pointer;
+	transition: filter 0.15s;
+	white-space: nowrap; width: auto;
+}
+button:hover, button:focus { filter: brightness(1.15); }
+button.danger { color: var(--err); border-color: var(--err); }
+button.small { padding: 5px 10px; font-size: 12px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+pre.rules { background: var(--bg); color: var(--text); padding: 10px; border-radius: 8px;
+	font: 12px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	white-space: pre-wrap; word-break: break-all; max-height: 250px; overflow: auto;
+	margin: 0; border: 1px solid var(--border);
+}
+.status { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.status.ok { color: var(--ok); }
+.status.warn { color: var(--warn); }
+.status.err { color: var(--err); }
+.selected-meta { color: var(--muted); font-size: 12px; margin-top: 4px; min-height: 18px; }
+.row .filter {
+	background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+	font-size: 12px; flex: 1;
+}
+</style>
+</head>
+<body>
+<div class="app">
+	<header>
+		<h1>redirfs-full</h1>
+		<span class="ver">v0.1.0-mvp · KSU-Next</span>
+	</header>
+
+	<section>
+		<h2>Running processes</h2>
+		<div class="row">
+			<input id="proc-filter" class="filter" type="text" placeholder="filter by name / UID …" autocomplete="off" />
+		</div>
+		<div class="row">
+			<select id="proc-select" size="1"></select>
+		</div>
+		<div id="proc-meta" class="selected-meta">—</div>
+		<div class="actions">
+			<button class="small" id="refresh-procs">Refresh</button>
+			<button class="small" id="show-all" type="button">Show all <span id="proc-count">0</span></button>
+		</div>
+	</section>
+
+	<section>
+		<h2>Add rule</h2>
+		<div class="row">
+			<label for="src">src</label>
+			<input id="src" type="text" placeholder="/virtual/path/seen/by/app" autocomplete="off" spellcheck="false" />
+		</div>
+		<div class="row">
+			<label for="dst">dst</label>
+			<input id="dst" type="text" placeholder="/real/path/served" autocomplete="off" spellcheck="false" />
+		</div>
+		<div class="row">
+			<label for="uid">uid</label>
+			<input id="uid" type="text" placeholder="* (any) or numeric" autocomplete="off" />
+			<label for="gid">gid</label>
+			<input id="gid" type="text" placeholder="*" autocomplete="off" />
+		</div>
+		<div class="actions">
+			<button id="add-rule">Add rule</button>
+			<button class="small" id="use-selected">Use selected UID</button>
+		</div>
+		<div id="add-status" class="status"></div>
+	</section>
+
+	<section>
+		<h2>Current rules</h2>
+		<pre id="rules" class="rules">loading…</pre>
+		<div class="actions">
+			<button class="small" id="reload-rules">Refresh</button>
+			<button class="small" id="reload-conf">Reload rules.conf</button>
+			<button class="small danger" id="clear-rules">Clear all</button>
+		</div>
+		<div id="rules-status" class="status"></div>
+	</section>
+
+	<section>
+		<h2>Module state</h2>
+		<pre id="diag" class="rules">probing…</pre>
+		<div class="actions">
+			<button class="small" id="refresh-diag">Refresh</button>
+			<button class="small" id="toggle-audit">Toggle audit</button>
+			<button class="small" id="toggle-root-hide">Toggle hide_from_root</button>
+		</div>
+	</section>
+</div>
+
+<script>
+/* eslint-env browser */
+'use strict';
+
+/* ---- ksu.exec wrapper ----------------------------------------------------
+ * KSU-Next/KSU exposes window.ksu (sometimes also window.KernelSU). The
+ * canonical async pattern uses a named callback string the WebView resolves.
+ */
+function exec(cmd) {
+	return new Promise((resolve, reject) => {
+		const cb = '__rfl_cb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+		window[cb] = function (errno, stdout, stderr) {
+			try { delete window[cb]; } catch (_) {}
+			if (errno === 0 || errno === '0') resolve(String(stdout || ''));
+			else reject(new Error((stderr && String(stderr).trim()) || ('exit ' + errno)));
+		};
+		try {
+			const api = window.ksu || window.KernelSU;
+			if (!api || typeof api.exec !== 'function') {
+				delete window[cb];
+				reject(new Error('ksu.exec not available — webui must be opened from KSU-Next Manager'));
+				return;
+			}
+			api.exec(cmd, '{}', cb);
+		} catch (e) {
+			try { delete window[cb]; } catch (_) {}
+			reject(e);
+		}
+	});
+}
+
+/* ---- process discovery --------------------------------------------------
+ * Pull (PID, UID, NAME) for every process. Android's toybox ps supports the
+ * GNU-style -o syntax. Fallback to walking /proc/[0-9]*/status if that fails.
+ */
+async function fetchProcesses() {
+	try {
+		const out = await exec("ps -A -o PID,USER,UID,COMM,NAME 2>/dev/null || ps -A -o PID,USER,UID,COMM");
+		return parsePsOutput(out);
+	} catch (e1) {
+		// /proc walk fallback
+		try {
+			const out = await exec(
+				"for p in /proc/[0-9]*; do " +
+				"  pid=$(basename $p); " +
+				"  uid=$(awk '$1==\"Uid:\"{print $2; exit}' $p/status 2>/dev/null); " +
+				"  comm=$(cat $p/comm 2>/dev/null); " +
+				"  [ -n \"$uid\" ] && echo \"$pid $uid $comm\"; " +
+				"done"
+			);
+			return parseProcWalk(out);
+		} catch (e2) {
+			throw new Error('ps failed: ' + e1.message + ' / proc walk failed: ' + e2.message);
+		}
+	}
+}
+
+function parsePsOutput(out) {
+	const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
+	if (!lines.length) return [];
+	// Determine column indices from header
+	const header = lines[0].split(/\s+/);
+	let iPid = header.indexOf('PID'), iUid = header.indexOf('UID'), iName = header.indexOf('NAME');
+	if (iName < 0) iName = header.indexOf('COMM');
+	if (iPid < 0) iPid = 0;
+	if (iUid < 0) iUid = 2;
+	if (iName < 0) iName = header.length - 1;
+	const procs = [];
+	for (let i = 1; i < lines.length; i++) {
+		const parts = lines[i].split(/\s+/);
+		if (parts.length < 3) continue;
+		const pid  = parts[iPid];
+		const uid  = parts[iUid];
+		const name = parts.slice(iName).join(' ');
+		if (!/^\d+$/.test(pid) || !/^\d+$/.test(uid)) continue;
+		procs.push({ pid, uid, name });
+	}
+	return procs;
+}
+function parseProcWalk(out) {
+	return out.split('\n')
+		.map(l => l.trim().split(/\s+/))
+		.filter(p => p.length >= 3 && /^\d+$/.test(p[0]) && /^\d+$/.test(p[1]))
+		.map(p => ({ pid: p[0], uid: p[1], name: p.slice(2).join(' ') }));
+}
+
+/* ---- state --------------------------------------------------------------- */
+let allProcs = [];
+let showAll = false;
+
+function rebuildSelect() {
+	const filter = (document.getElementById('proc-filter').value || '').trim().toLowerCase();
+	const sel = document.getElementById('proc-select');
+	sel.innerHTML = '';
+	const placeholder = document.createElement('option');
+	placeholder.value = '';
+	placeholder.textContent = '-- pick a process --';
+	sel.appendChild(placeholder);
+
+	let shown = 0;
+	const list = allProcs
+		.slice()
+		.sort((a, b) => (Number(a.uid) - Number(b.uid)) || a.name.localeCompare(b.name));
+
+	const interesting = (p) => Number(p.uid) >= 10000;  // user apps
+	for (const p of list) {
+		if (!showAll && !interesting(p)) continue;
+		if (filter && !(p.name.toLowerCase().includes(filter) || p.pid === filter || p.uid === filter)) continue;
+		const opt = document.createElement('option');
+		opt.value = p.uid;
+		opt.dataset.pid = p.pid;
+		opt.dataset.name = p.name;
+		opt.textContent = `${p.name}  (PID ${p.pid}, UID ${p.uid})`;
+		sel.appendChild(opt);
+		shown++;
+	}
+	document.getElementById('proc-count').textContent = `(${shown})`;
+}
+
+function setStatus(elId, msg, kind) {
+	const el = document.getElementById(elId);
+	el.textContent = msg || '';
+	el.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+async function loadProcesses() {
+	setStatus('rules-status', 'fetching processes…');
+	try {
+		allProcs = await fetchProcesses();
+		rebuildSelect();
+		setStatus('rules-status', `${allProcs.length} processes`, 'ok');
+	} catch (e) {
+		setStatus('rules-status', e.message, 'err');
+	}
+}
+
+async function loadRules() {
+	try {
+		const out = await exec("cat /proc/redirfs/rules");
+		document.getElementById('rules').textContent = out;
+		setStatus('rules-status', '', null);
+	} catch (e) {
+		document.getElementById('rules').textContent = '(/proc/redirfs/rules unreadable — module loaded?)';
+		setStatus('rules-status', e.message, 'err');
+	}
+}
+
+async function loadDiag() {
+	try {
+		const out = await exec(
+			"echo '== lsmod =='; lsmod | grep redirfs || echo '(not loaded)'; " +
+			"echo; echo '== module params =='; " +
+			"for p in /sys/module/redirfs_full/parameters/*; do " +
+			"  [ -f \"$p\" ] && printf '  %s = %s\\n' \"$(basename $p)\" \"$(cat $p 2>/dev/null)\"; " +
+			"done 2>/dev/null; " +
+			"echo; echo '== last redirect events =='; " +
+			"dmesg 2>/dev/null | grep -E 'redirfs:' | tail -10 || echo '(dmesg restricted)'"
+		);
+		document.getElementById('diag').textContent = out;
+	} catch (e) {
+		document.getElementById('diag').textContent = 'diag failed: ' + e.message;
+	}
+}
+
+async function toggleHideFromRoot() {
+	try {
+		const cur = (await exec("cat /sys/module/redirfs_full/parameters/hide_from_root")).trim();
+		const next = (cur === 'Y' || cur === '1' || cur === 'true') ? '0' : '1';
+		await exec("echo " + next + " > /sys/module/redirfs_full/parameters/hide_from_root");
+		await loadDiag();
+		setStatus('rules-status', 'hide_from_root: ' + cur + ' -> ' + next, 'ok');
+	} catch (e) {
+		setStatus('rules-status', e.message, 'err');
+	}
+}
+
+async function addRule() {
+	const src = document.getElementById('src').value.trim();
+	const dst = document.getElementById('dst').value.trim();
+	let uid = document.getElementById('uid').value.trim();
+	let gid = document.getElementById('gid').value.trim();
+	if (!uid) uid = '*';
+	if (!gid) gid = '*';
+	if (!src || !dst) { setStatus('add-status', 'src and dst required', 'err'); return; }
+	if (!src.startsWith('/') || !dst.startsWith('/')) { setStatus('add-status', 'paths must be absolute', 'err'); return; }
+	// Defensively quote — single quotes around the full echo target.
+	const cmd = "echo 'add " + src + " " + dst + " " + uid + " " + gid + "' > /proc/redirfs/rules";
+	try {
+		await exec(cmd);
+		setStatus('add-status', 'added', 'ok');
+		await loadRules();
+	} catch (e) {
+		setStatus('add-status', 'add failed: ' + e.message, 'err');
+	}
+}
+
+async function clearRules() {
+	if (!confirm('Drop ALL rules? Running redirections continue until /proc/redirfs/rules is repopulated.')) return;
+	try {
+		await exec("echo 'clear' > /proc/redirfs/rules");
+		await loadRules();
+		setStatus('rules-status', 'cleared', 'ok');
+	} catch (e) {
+		setStatus('rules-status', e.message, 'err');
+	}
+}
+
+async function reloadConf() {
+	try {
+		const out = await exec("sh /data/adb/modules/redirfs-full/action.sh 2>&1");
+		document.getElementById('rules').textContent = out;
+		setStatus('rules-status', 'rules.conf reloaded', 'ok');
+		await loadRules();
+	} catch (e) {
+		setStatus('rules-status', 'reload failed: ' + e.message, 'err');
+	}
+}
+
+async function toggleAudit() {
+	try {
+		// We don't have a direct query for current state; flip and report.
+		const cur = await exec("dmesg 2>/dev/null | grep -c 'redirfs:' | head -1").catch(() => '?');
+		await exec("echo 'audit off' > /proc/redirfs/rules || true; echo 'audit on' > /proc/redirfs/rules");
+		setStatus('rules-status', 'audit on (was ' + cur.trim() + ' events buffered)', 'ok');
+	} catch (e) {
+		setStatus('rules-status', e.message, 'err');
+	}
+}
+
+/* ---- event wiring ------------------------------------------------------- */
+function init() {
+	document.getElementById('refresh-procs').addEventListener('click', loadProcesses);
+	document.getElementById('proc-filter').addEventListener('input', rebuildSelect);
+	document.getElementById('show-all').addEventListener('click', () => { showAll = !showAll; rebuildSelect(); });
+	document.getElementById('proc-select').addEventListener('change', (e) => {
+		const opt = e.target.selectedOptions[0];
+		if (!opt || !opt.value) { document.getElementById('proc-meta').textContent = '—'; return; }
+		document.getElementById('proc-meta').textContent =
+			`Selected ${opt.dataset.name} · PID ${opt.dataset.pid} · UID ${opt.value}`;
+	});
+	document.getElementById('use-selected').addEventListener('click', () => {
+		const sel = document.getElementById('proc-select');
+		if (!sel.value) { setStatus('add-status', 'pick a process first', 'warn'); return; }
+		document.getElementById('uid').value = sel.value;
+		setStatus('add-status', 'uid set to ' + sel.value, 'ok');
+	});
+	document.getElementById('add-rule').addEventListener('click', addRule);
+	document.getElementById('reload-rules').addEventListener('click', loadRules);
+	document.getElementById('reload-conf').addEventListener('click', reloadConf);
+	document.getElementById('clear-rules').addEventListener('click', clearRules);
+	document.getElementById('refresh-diag').addEventListener('click', loadDiag);
+	document.getElementById('toggle-audit').addEventListener('click', toggleAudit);
+	document.getElementById('toggle-root-hide').addEventListener('click', toggleHideFromRoot);
+
+	loadProcesses();
+	loadRules();
+	loadDiag();
+}
+
+if (document.readyState === 'loading') {
+	document.addEventListener('DOMContentLoaded', init);
+} else {
+	init();
+}
+</script>
+</body>
+</html>

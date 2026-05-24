@@ -1,0 +1,5 @@
+# redirfs-full rules.conf
+#
+# Phase 1 (selpol) has no user-configurable rules — the dirty-context
+# and dirty-rule tables are compiled in. Future phases will use this
+# file for path-redirection rules (see redirfs-lite for that grammar).

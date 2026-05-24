@@ -1,0 +1,8 @@
+id=redirfs-full
+name=redirfs-full (KSU-Next)
+version=0.1.0-mvp
+versionCode=1
+author=redirfs-full contributors
+description=KernelSU-Next module: kprobe-based hiding LKM (Phase 1: SELinux selpol). Hides KSU/Magisk/LSPosed SELinux contexts and dirty-policy rule queries. Manage via Action button or /data/adb/redirfs/rules.conf.
+support=https://github.com/jakeboardman47/Super-Builders/tree/redirfs-full-mvp/redirfs-full
+minMagisk=20400

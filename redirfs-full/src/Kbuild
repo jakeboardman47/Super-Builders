@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0
+obj-m += redirfs_full.o
+
+redirfs_full-y := \
+	main.o \
+	syms.o \
+	subsys.o \
+	proc.o \
+	sel/sel_dirty.o \
+	sel/sel_hooks.o
+
+ccflags-y += -Wall -Werror=implicit-function-declaration -I$(src)

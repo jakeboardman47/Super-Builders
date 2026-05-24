@@ -1,0 +1,234 @@
+name: Build redirfs-full
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      android_version:
+        description: "Android version"
+        type: choice
+        options: [android15, android16]
+        default: "android15"
+      kernel_version:
+        description: "Kernel version"
+        type: choice
+        options: ["6.6", "6.12"]
+        default: "6.6"
+      manifest_branch:
+        description: "Manifest branch (full name, e.g. common-android15-6.6-lts or common-android15-6.6-2026-04)"
+        type: string
+        default: "common-android15-6.6-lts"
+      sub_level_hint:
+        description: "Expected SUBLEVEL (informational only; the actual value comes from synced source)"
+        type: string
+        default: "139"
+
+jobs:
+  build:
+    name: "redirfs-full ${{ inputs.kernel_version }} ${{ inputs.manifest_branch }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANDROID_VER:     ${{ inputs.android_version }}
+      KERNEL_VER:      ${{ inputs.kernel_version }}
+      MANIFEST_BRANCH: ${{ inputs.manifest_branch }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Free disk
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          rm_cmd: "rmz"
+          rmz_version: "3.1.1"
+          testing: false
+
+      - name: Install repo tool
+        run: |
+          mkdir -p $HOME/bin
+          curl -L https://storage.googleapis.com/git-repo-downloads/repo -o $HOME/bin/repo
+          chmod +x $HOME/bin/repo
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Sync kernel source
+        run: |
+          mkdir -p kernel_src && cd kernel_src
+          repo init -u https://android.googlesource.com/kernel/manifest \
+              -b "$MANIFEST_BRANCH" --depth=1
+          repo --trace sync -c -j$(nproc) --fail-fast --no-tags --force-sync --no-clone-bundle
+          echo "==== synced Makefile SUBLEVEL ===="
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION)' common/Makefile | head -4
+
+      - name: Configure kernel for module headers
+        working-directory: kernel_src
+        run: |
+          # Prebuilt clang sysroot lacks glibc 2.39 C23 symbols — link against system libc
+          if [ -f common/tools/bpf/resolve_btfids/Makefile ]; then
+            echo 'override KBUILD_HOSTLDFLAGS += --sysroot=/' >> common/tools/bpf/resolve_btfids/Makefile
+            echo 'override LDFLAGS += --sysroot=/' >> common/tools/bpf/resolve_btfids/Makefile
+          fi
+          # Out-of-tree modules need Module.symvers for CONFIG_MODVERSIONS CRC
+          # generation in MODPOST. modules_prepare alone doesn't produce it —
+          # we need the full kernel_aarch64 build (slower but canonical).
+          tools/bazel build --config=fast --lto=none //common:kernel_aarch64
+
+      - name: Locate built kernel headers
+        id: locate
+        working-directory: kernel_src
+        run: |
+          # A valid KDIR is a directory with a kernel-shape: contains arch/arm64
+          # and either a Makefile or scripts/. We rank candidates by how
+          # "prepared" they look (.config / include/generated present = best).
+          score_kdir() {
+              local d="$1"
+              local s=0
+              [ -d "$d/arch/arm64" ] || { echo -1; return; }
+              [ -f "$d/Makefile" ]      && s=$((s + 1))
+              [ -d "$d/scripts" ]       && s=$((s + 1))
+              [ -d "$d/include" ]       && s=$((s + 1))
+              [ -f "$d/.config" ]       && s=$((s + 4))
+              [ -d "$d/include/generated" ] && s=$((s + 4))
+              [ -f "$d/Module.symvers" ]    && s=$((s + 4))
+              echo "$s"
+          }
+
+          BEST_KDIR=""
+          BEST_SCORE=0
+          for c in $(find out -maxdepth 6 -type d -name common 2>/dev/null; echo common); do
+              [ -d "$c" ] || continue
+              sc=$(score_kdir "$c")
+              if [ "$sc" -gt "$BEST_SCORE" ]; then
+                  BEST_SCORE=$sc; BEST_KDIR=$c
+              fi
+          done
+
+          if [ -z "$BEST_KDIR" ]; then
+              echo "::error::Could not locate any kernel-shaped common/ directory"
+              echo "::group::out/ tree (depth 4)"
+              find out -maxdepth 4 -type d 2>/dev/null | head -40
+              echo "::endgroup::"
+              exit 1
+          fi
+
+          KDIR_ABS=$(cd "$BEST_KDIR" && pwd)
+          echo "kdir=$KDIR_ABS" >> "$GITHUB_OUTPUT"
+          echo "Selected KDIR=$KDIR_ABS (score=$BEST_SCORE)"
+          echo "::group::KDIR contents"
+          ls -la "$KDIR_ABS" | head -40
+          for f in Makefile .config Module.symvers vmlinux; do
+              [ -e "$KDIR_ABS/$f" ] && echo "PRESENT: $f" || echo "MISSING: $f"
+          done
+          [ -d "$KDIR_ABS/include/generated" ] && echo "PRESENT: include/generated/" || echo "MISSING: include/generated/"
+          echo "::endgroup::"
+
+      - name: Setup clang toolchain
+        id: clang
+        working-directory: kernel_src
+        run: |
+          # Always install Ubuntu LLVM utilities. Kbuild with LLVM=1 needs the
+          # full set: clang, ld.lld, llvm-ar, llvm-nm, llvm-objcopy, llvm-strip,
+          # llvm-readelf, llvm-objdump, llvm-cov. AOSP prebuilt ships clang+lld
+          # only via the clang-r* dir; the rest live in the same bin/ folder.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm dwarves libelf1 libelf-dev
+          # dwarves provides pahole (BTF [M] step).
+          # libelf1/libelf-dev provide libelf.so for resolve_btfids at runtime.
+
+          # Prefer AOSP prebuilt clang if synced (matches the compiler used to
+          # build the running kernel — avoids the "compiler differs" warning).
+          CLANG_REL=$(find prebuilts/clang/host/linux-x86 -maxdepth 2 -type d -name 'clang-r*' 2>/dev/null | sort | tail -1)
+          if [ -n "$CLANG_REL" ] && [ -x "$CLANG_REL/bin/clang" ]; then
+              CLANG_ABS=$(cd "$CLANG_REL" && pwd)
+              echo "Using AOSP prebuilt: $CLANG_ABS"
+              echo "$CLANG_ABS/bin" >> "$GITHUB_PATH"
+              echo "source=aosp" >> "$GITHUB_OUTPUT"
+              echo "clang_dir=$CLANG_ABS/bin" >> "$GITHUB_OUTPUT"
+          else
+              echo "AOSP prebuilt unavailable, using Ubuntu /usr/bin clang"
+              echo "source=ubuntu" >> "$GITHUB_OUTPUT"
+              echo "clang_dir=/usr/bin" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Effective PATH for compiler: $(which clang lld llvm-strip llvm-objcopy 2>&1 | head -5)"
+          clang --version | head -1
+
+      - name: Build redirfs-full
+        env:
+          KDIR:         ${{ steps.locate.outputs.kdir }}
+          CLANG_SOURCE: ${{ steps.clang.outputs.source }}
+          CLANG_DIR:    ${{ steps.clang.outputs.clang_dir }}
+        run: |
+          set -e
+          echo "Build env: KDIR=$KDIR  CLANG_SOURCE=$CLANG_SOURCE  CLANG_DIR=$CLANG_DIR"
+          which clang lld llvm-objcopy llvm-strip || true
+          cd "$GITHUB_WORKSPACE/redirfs-full"
+          # LLVM=1 makes kbuild use unprefixed clang/ld.lld/llvm-* — no CROSS_COMPILE needed.
+          # Pass full PATH-resolved clang to make sure we use what we picked.
+          make KDIR="$KDIR" ARCH=arm64 LLVM=1 \
+               HOSTCC=clang HOSTCXX=clang++ CC=clang LD=ld.lld \
+               2>&1 | tee build.log
+          ls -la src/redirfs_full.ko
+          file src/redirfs_full.ko
+          echo "==== vermagic ===="
+          strings -a src/redirfs_full.ko | grep '^vermagic=' || echo "(no vermagic string?)"
+
+      - name: Package Magisk/KSU module zip
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/redirfs-full"
+          STAGE=/tmp/redirfs-full-module
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+
+          # Copy template
+          cp -r magisk-module/. "$STAGE/"
+
+          # Drop in the freshly-built .ko (strip debug to shrink ~450KB -> ~80KB)
+          cp src/redirfs_full.ko "$STAGE/redirfs_full.ko"
+          ${CLANG_DIR:-/usr/bin}/llvm-strip --strip-debug "$STAGE/redirfs_full.ko" 2>/dev/null \
+              || llvm-strip --strip-debug "$STAGE/redirfs_full.ko" 2>/dev/null \
+              || echo "(strip failed, shipping with debug_info)"
+          ls -la "$STAGE/redirfs_full.ko"
+
+          # Embed kernel target + vermagic in module.prop for traceability
+          KVM=$(strings -a "$STAGE/redirfs_full.ko" | grep '^vermagic=' | head -1)
+          {
+              echo ""
+              echo "# build provenance"
+              echo "# kernel-target: ${MANIFEST_BRANCH}"
+              echo "# module-vermagic: ${KVM#vermagic=}"
+              echo "# built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$STAGE/module.prop"
+
+          # Make scripts executable (zip preserves perm bits for KSU-Next/Magisk)
+          chmod +x "$STAGE"/META-INF/com/google/android/update-binary
+          chmod +x "$STAGE"/customize.sh
+          chmod +x "$STAGE"/post-fs-data.sh
+          chmod +x "$STAGE"/service.sh
+          chmod +x "$STAGE"/action.sh 2>/dev/null
+          chmod +x "$STAGE"/uninstall.sh 2>/dev/null
+
+          # Zip with unix permissions preserved
+          ZIPNAME="redirfs-full-ksu-next-${MANIFEST_BRANCH}.zip"
+          (cd "$STAGE" && zip -r9 "$GITHUB_WORKSPACE/redirfs-full/$ZIPNAME" .) | tail -20
+          ls -la "$GITHUB_WORKSPACE/redirfs-full/$ZIPNAME"
+          echo "ZIPNAME=$ZIPNAME" >> "$GITHUB_ENV"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: redirfs-full-${{ inputs.kernel_version }}-${{ inputs.manifest_branch }}
+          path: |
+            redirfs-full/src/redirfs_full.ko
+            redirfs-full/build.log
+            redirfs-full/redirfs-full-*.zip
+          if-no-files-found: warn
+          retention-days: 14
